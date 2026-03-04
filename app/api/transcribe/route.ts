@@ -17,13 +17,19 @@ export async function POST(req: NextRequest) {
     const file = formData.get("audio") as File;
 
     if (!file) {
-      return NextResponse.json({ error: "No audio file provided" }, { status: 400 });
+      return NextResponse.json(
+        { error: "No audio file provided" },
+        { status: 400 },
+      );
     }
 
     if (file.size > 25 * 1024 * 1024) {
       return NextResponse.json(
-        { error: "File too large. Maximum size is 25MB. Please compress your audio first." },
-        { status: 413 }
+        {
+          error:
+            "File too large. Maximum size is 25MB. Please compress your audio first.",
+        },
+        { status: 413 },
       );
     }
 
@@ -34,7 +40,9 @@ export async function POST(req: NextRequest) {
       timestamp_granularities: ["segment"],
     });
 
-    const segments: TranscriptSegment[] = (transcription.segments ?? []).map((seg) => ({
+    const segments: TranscriptSegment[] = (
+      (transcription as any).segments ?? []
+    ).map((seg: { start: number; end: number; text: string }) => ({
       start: seg.start,
       end: seg.end,
       text: seg.text,
@@ -43,6 +51,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ segments });
   } catch (error) {
     console.error("Transcription error:", error);
-    return NextResponse.json({ error: "Transcription failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Transcription failed" },
+      { status: 500 },
+    );
   }
 }
