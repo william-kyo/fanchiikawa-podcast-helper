@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Clock, Loader2 } from "lucide-react";
+import { Search, Clock, Loader2, Mic, MicOff } from "lucide-react";
 
 interface SearchResult {
   text: string;
@@ -63,10 +63,68 @@ export function SearchPanel({
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [alternatives, setAlternatives] = useState<string[]>([]);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    setSpeechSupported(
+      typeof window !== "undefined" &&
+        ("SpeechRecognition" in window || "webkitSpeechRecognition" in window)
+    );
+  }, []);
+
+  const handleMicClick = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SpeechRecognitionAPI = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recognition: any = new SpeechRecognitionAPI();
+    recognition.maxAlternatives = 5;
+    recognition.interimResults = false;
+    recognitionRef.current = recognition;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setAlternatives([]);
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (event: any) => {
+      const result = event.results[0];
+      const alts: string[] = [];
+      for (let i = 0; i < result.length; i++) {
+        const t = result[i].transcript.trim();
+        if (t && !alts.includes(t)) alts.push(t);
+      }
+      setAlternatives(alts);
+      if (alts[0]) setQuery(alts[0]);
+    };
+
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognition.start();
+  };
+
+  const handleSelectAlternative = (alt: string) => {
+    setQuery(alt);
+    setAlternatives([]);
+    setActiveQuery(alt);
+    onSearch(alt);
+  };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (query.trim()) {
+      setAlternatives([]);
       setActiveQuery(query.trim());
       onSearch(query.trim());
     }
@@ -88,16 +146,72 @@ export function SearchPanel({
           <Input
             placeholder={placeholder}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setAlternatives([]);
+            }}
             className="pl-9"
             disabled={searchDisabled}
             aria-label="Search transcript"
           />
         </div>
+
+        {speechSupported && (
+          <Button
+            type="button"
+            variant={isListening ? "destructive" : "outline"}
+            size="icon"
+            onClick={handleMicClick}
+            disabled={searchDisabled}
+            aria-label={isListening ? "Stop listening" : "Search by voice"}
+            title={isListening ? "Stop" : "Voice search"}
+          >
+            {isListening ? (
+              <MicOff className="size-4 animate-pulse" />
+            ) : (
+              <Mic className="size-4" />
+            )}
+          </Button>
+        )}
+
         <Button type="submit" disabled={searchDisabled || !query.trim()}>
           Search
         </Button>
       </form>
+
+      {isListening && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="relative flex size-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+            <span className="relative inline-flex size-2 rounded-full bg-red-500" />
+          </span>
+          Listening... speak now
+        </div>
+      )}
+
+      {alternatives.length > 1 && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-medium text-muted-foreground">
+            Select a candidate:
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {alternatives.map((alt, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => handleSelectAlternative(alt)}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors hover:bg-accent ${
+                  i === 0
+                    ? "border-foreground/30 bg-secondary font-medium"
+                    : "border-border text-muted-foreground"
+                }`}
+              >
+                {alt}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isTranscribing && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
