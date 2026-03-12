@@ -1,13 +1,20 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Clock, Loader2, Mic, MicOff } from "lucide-react";
+import { DictionaryPanel } from "@/components/dictionary-panel";
 
 interface SearchResult {
   text: string;
   timestamp: number;
+}
+
+interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
 }
 
 interface SearchPanelProps {
@@ -17,6 +24,8 @@ interface SearchPanelProps {
   disabled: boolean;
   isTranscribing: boolean;
   hasTranscript: boolean;
+  transcript: TranscriptSegment[];
+  currentTime: number;
 }
 
 function formatTime(seconds: number): string {
@@ -31,18 +40,13 @@ function formatTime(seconds: number): string {
 
 function HighlightedText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
-
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const parts = text.split(new RegExp(`(${escaped})`, "gi"));
-
   return (
     <>
       {parts.map((part, i) =>
         part.toLowerCase() === query.toLowerCase() ? (
-          <mark
-            key={i}
-            className="rounded-sm bg-yellow-200 px-0.5 dark:bg-yellow-800"
-          >
+          <mark key={i} className="rounded-sm bg-yellow-200 px-0.5 dark:bg-yellow-800">
             {part}
           </mark>
         ) : (
@@ -60,6 +64,8 @@ export function SearchPanel({
   disabled,
   isTranscribing,
   hasTranscript,
+  transcript,
+  currentTime,
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
@@ -69,6 +75,11 @@ export function SearchPanel({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
 
+  // Dictionary state
+  const [lookupWord, setLookupWord] = useState("");
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+
   useEffect(() => {
     setSpeechSupported(
       typeof window !== "undefined" &&
@@ -76,13 +87,53 @@ export function SearchPanel({
     );
   }, []);
 
+  // Extract ~60s of context around current playback position
+  const getContext = useCallback(() => {
+    if (!transcript.length) return undefined;
+    const nearby = transcript
+      .filter((seg) => Math.abs(seg.start - currentTime) < 30)
+      .map((seg) => seg.text.trim())
+      .join(" ");
+    return nearby || undefined;
+  }, [transcript, currentTime]);
+
+  const handleLookup = useCallback(
+    async (word: string) => {
+      if (!word.trim()) return;
+      setLookupWord(word);
+      setExplanation(null);
+      setIsLookingUp(true);
+
+      try {
+        const res = await fetch("/api/dictionary", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ word, context: getContext() }),
+        });
+        const data = await res.json();
+        setExplanation(res.ok ? (data.explanation ?? "") : "Lookup failed.");
+      } catch {
+        setExplanation("Lookup failed.");
+      } finally {
+        setIsLookingUp(false);
+      }
+    },
+    [getContext]
+  );
+
+  // Detect text selection in results and trigger lookup
+  const handleResultsMouseUp = useCallback(() => {
+    const selected = window.getSelection()?.toString().trim();
+    if (selected && selected.length >= 1 && selected.length <= 50) {
+      handleLookup(selected);
+    }
+  }, [handleLookup]);
+
   const handleMicClick = () => {
     if (isListening) {
       recognitionRef.current?.stop();
       return;
     }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SpeechRecognitionAPI = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,7 +146,6 @@ export function SearchPanel({
       setIsListening(true);
       setAlternatives([]);
     };
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (event: any) => {
       const result = event.results[0];
@@ -107,10 +157,8 @@ export function SearchPanel({
       setAlternatives(alts);
       if (alts[0]) setQuery(alts[0]);
     };
-
     recognition.onerror = () => setIsListening(false);
     recognition.onend = () => setIsListening(false);
-
     recognition.start();
   };
 
@@ -228,10 +276,21 @@ export function SearchPanel({
 
       {results.length > 0 && (
         <div className="flex flex-col gap-1">
-          <p className="text-xs font-medium text-muted-foreground">
-            {results.length} result{results.length !== 1 ? "s" : ""} found for &ldquo;{activeQuery}&rdquo;
-          </p>
-          <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto" role="list">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">
+              {results.length} result{results.length !== 1 ? "s" : ""} found
+              for &ldquo;{activeQuery}&rdquo;
+            </p>
+            <p className="text-xs text-muted-foreground/60">
+              Select text to look up
+            </p>
+          </div>
+          {/* onMouseUp detects text selection for dictionary lookup */}
+          <ul
+            className="flex max-h-64 flex-col gap-1 overflow-y-auto"
+            role="list"
+            onMouseUp={handleResultsMouseUp}
+          >
             {results.map((result, i) => (
               <li key={i}>
                 <button
@@ -251,6 +310,19 @@ export function SearchPanel({
             ))}
           </ul>
         </div>
+      )}
+
+      {/* Dictionary Panel */}
+      {lookupWord && (
+        <DictionaryPanel
+          word={lookupWord}
+          explanation={explanation}
+          isLoading={isLookingUp}
+          onClose={() => {
+            setLookupWord("");
+            setExplanation(null);
+          }}
+        />
       )}
     </div>
   );

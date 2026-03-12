@@ -262,6 +262,8 @@ export default function Home() {
                   disabled={!audioUrl}
                   isTranscribing={isTranscribing}
                   hasTranscript={transcript.length > 0}
+                  transcript={transcript}
+                  currentTime={currentTime}
                 />
               </CardContent>
             </Card>
